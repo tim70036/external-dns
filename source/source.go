@@ -142,6 +142,7 @@ func parseTemplate(fqdnTemplate string) (tmpl *template.Template, err error) {
 	}
 	funcs := template.FuncMap{
 		"trimPrefix": strings.TrimPrefix,
+		"replaceAll": strings.ReplaceAll,
 	}
 	return template.New("endpoint").Funcs(funcs).Parse(fqdnTemplate)
 }
