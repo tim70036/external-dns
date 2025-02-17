@@ -31,15 +31,17 @@ import (
 )
 
 type podSource struct {
-	client        kubernetes.Interface
-	namespace     string
-	podInformer   coreinformers.PodInformer
-	nodeInformer  coreinformers.NodeInformer
-	compatibility string
+	client                   kubernetes.Interface
+	namespace                string
+	podInformer              coreinformers.PodInformer
+	nodeInformer             coreinformers.NodeInformer
+	compatibility            string
+	ignoreNonHostNetworkPods bool
+	podSourceDomain          string
 }
 
 // NewPodSource creates a new podSource with the given config.
-func NewPodSource(ctx context.Context, kubeClient kubernetes.Interface, namespace string, compatibility string) (Source, error) {
+func NewPodSource(ctx context.Context, kubeClient kubernetes.Interface, namespace string, compatibility string, ignoreNonHostNetworkPods bool, podSourceDomain string) (Source, error) {
 	informerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(namespace))
 	podInformer := informerFactory.Core().V1().Pods()
 	nodeInformer := informerFactory.Core().V1().Nodes()
@@ -65,11 +67,13 @@ func NewPodSource(ctx context.Context, kubeClient kubernetes.Interface, namespac
 	}
 
 	return &podSource{
-		client:        kubeClient,
-		podInformer:   podInformer,
-		nodeInformer:  nodeInformer,
-		namespace:     namespace,
-		compatibility: compatibility,
+		client:                   kubeClient,
+		podInformer:              podInformer,
+		nodeInformer:             nodeInformer,
+		namespace:                namespace,
+		compatibility:            compatibility,
+		ignoreNonHostNetworkPods: ignoreNonHostNetworkPods,
+		podSourceDomain:          podSourceDomain,
 	}, nil
 }
 
@@ -82,58 +86,95 @@ func (ps *podSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error
 		return nil, err
 	}
 
-	domains := make(map[string][]string)
+	endpointMap := make(map[endpoint.EndpointKey][]string)
 	for _, pod := range pods {
-		if !pod.Spec.HostNetwork {
+		if ps.ignoreNonHostNetworkPods && !pod.Spec.HostNetwork {
 			log.Debugf("skipping pod %s. hostNetwork=false", pod.Name)
 			continue
 		}
 
-		if domain, ok := pod.Annotations[internalHostnameAnnotationKey]; ok {
-			if _, ok := domains[domain]; !ok {
-				domains[domain] = []string{}
+		targets := getTargetsFromTargetAnnotation(pod.Annotations)
+
+		if domainAnnotation, ok := pod.Annotations[internalHostnameAnnotationKey]; ok {
+			domainList := splitHostnameAnnotation(domainAnnotation)
+			for _, domain := range domainList {
+				if len(targets) == 0 {
+					addToEndpointMap(endpointMap, domain, suitableType(pod.Status.PodIP), pod.Status.PodIP)
+				} else {
+					for _, target := range targets {
+						addToEndpointMap(endpointMap, domain, suitableType(target), target)
+					}
+				}
 			}
-			domains[domain] = append(domains[domain], pod.Status.PodIP)
 		}
 
-		if domain, ok := pod.Annotations[hostnameAnnotationKey]; ok {
-			if _, ok := domains[domain]; !ok {
-				domains[domain] = []string{}
-			}
-
-			node, _ := ps.nodeInformer.Lister().Get(pod.Spec.NodeName)
-			for _, address := range node.Status.Addresses {
-				if address.Type == corev1.NodeExternalIP {
-					domains[domain] = append(domains[domain], address.Address)
+		if domainAnnotation, ok := pod.Annotations[hostnameAnnotationKey]; ok {
+			domainList := splitHostnameAnnotation(domainAnnotation)
+			for _, domain := range domainList {
+				if len(targets) == 0 {
+					node, _ := ps.nodeInformer.Lister().Get(pod.Spec.NodeName)
+					for _, address := range node.Status.Addresses {
+						recordType := suitableType(address.Address)
+						// IPv6 addresses are labeled as NodeInternalIP despite being usable externally as well.
+						if address.Type == corev1.NodeExternalIP || (address.Type == corev1.NodeInternalIP && recordType == endpoint.RecordTypeAAAA) {
+							addToEndpointMap(endpointMap, domain, recordType, address.Address)
+						}
+					}
+				} else {
+					for _, target := range targets {
+						addToEndpointMap(endpointMap, domain, suitableType(target), target)
+					}
 				}
 			}
 		}
 
 		if ps.compatibility == "kops-dns-controller" {
-			if domain, ok := pod.Annotations[kopsDNSControllerInternalHostnameAnnotationKey]; ok {
-				if _, ok := domains[domain]; !ok {
-					domains[domain] = []string{}
+			if domainAnnotation, ok := pod.Annotations[kopsDNSControllerInternalHostnameAnnotationKey]; ok {
+				domainList := splitHostnameAnnotation(domainAnnotation)
+				for _, domain := range domainList {
+					addToEndpointMap(endpointMap, domain, suitableType(pod.Status.PodIP), pod.Status.PodIP)
 				}
-				domains[domain] = append(domains[domain], pod.Status.PodIP)
 			}
 
-			if domain, ok := pod.Annotations[kopsDNSControllerHostnameAnnotationKey]; ok {
-				if _, ok := domains[domain]; !ok {
-					domains[domain] = []string{}
-				}
-
-				node, _ := ps.nodeInformer.Lister().Get(pod.Spec.NodeName)
-				for _, address := range node.Status.Addresses {
-					if address.Type == corev1.NodeExternalIP {
-						domains[domain] = append(domains[domain], address.Address)
+			if domainAnnotation, ok := pod.Annotations[kopsDNSControllerHostnameAnnotationKey]; ok {
+				domainList := splitHostnameAnnotation(domainAnnotation)
+				for _, domain := range domainList {
+					node, _ := ps.nodeInformer.Lister().Get(pod.Spec.NodeName)
+					for _, address := range node.Status.Addresses {
+						recordType := suitableType(address.Address)
+						// IPv6 addresses are labeled as NodeInternalIP despite being usable externally as well.
+						if address.Type == corev1.NodeExternalIP || (address.Type == corev1.NodeInternalIP && recordType == endpoint.RecordTypeAAAA) {
+							addToEndpointMap(endpointMap, domain, recordType, address.Address)
+						}
 					}
 				}
 			}
 		}
+
+		if ps.podSourceDomain != "" {
+			domain := pod.ObjectMeta.Name + "." + ps.podSourceDomain
+			if len(targets) == 0 {
+				addToEndpointMap(endpointMap, domain, suitableType(pod.Status.PodIP), pod.Status.PodIP)
+			}
+			for _, target := range targets {
+				addToEndpointMap(endpointMap, domain, suitableType(target), target)
+			}
+		}
 	}
 	endpoints := []*endpoint.Endpoint{}
-	for domain, targets := range domains {
-		endpoints = append(endpoints, endpoint.NewEndpoint(domain, endpoint.RecordTypeA, targets...))
+	for key, targets := range endpointMap {
+		endpoints = append(endpoints, endpoint.NewEndpoint(key.DNSName, key.RecordType, targets...))
 	}
 	return endpoints, nil
+}
+
+func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, domain string, recordType string, address string) {
+	key := endpoint.EndpointKey{
+		DNSName:    domain,
+		RecordType: recordType,
+	}
+	if _, ok := endpointMap[key]; !ok {
+		endpointMap[key] = []string{}
+	}
+	endpointMap[key] = append(endpointMap[key], address)
 }

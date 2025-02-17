@@ -110,7 +110,7 @@ func (p *TencentCloudProvider) getPrivateZones() ([]*privatedns.PrivateZone, err
 		if err != nil {
 			return nil, err
 		}
-		if response.Response.PrivateZoneSet != nil && len(response.Response.PrivateZoneSet) > 0 {
+		if len(response.Response.PrivateZoneSet) > 0 {
 			privateZones = append(privateZones, response.Response.PrivateZoneSet...)
 		}
 		totalCount = *response.Response.TotalCount
@@ -119,7 +119,7 @@ func (p *TencentCloudProvider) getPrivateZones() ([]*privatedns.PrivateZone, err
 
 	privateZonesFilter := make([]*privatedns.PrivateZone, 0)
 	for _, privateZone := range privateZones {
-		if p.domainFilter.IsConfigured() && !p.domainFilter.Match(*privateZone.Domain) {
+		if !p.domainFilter.Match(*privateZone.Domain) {
 			continue
 		}
 		privateZonesFilter = append(privateZonesFilter, privateZone)
@@ -140,7 +140,7 @@ func (p *TencentCloudProvider) getPrivateZoneRecords(zoneId string) ([]*privated
 		if err != nil {
 			return nil, err
 		}
-		if response.Response.RecordSet != nil && len(response.Response.RecordSet) > 0 {
+		if len(response.Response.RecordSet) > 0 {
 			privateZoneRecords = append(privateZoneRecords, response.Response.RecordSet...)
 		}
 		totalCount = *response.Response.TotalCount

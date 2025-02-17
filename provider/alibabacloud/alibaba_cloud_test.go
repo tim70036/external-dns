@@ -98,6 +98,9 @@ func (m *MockAlibabaCloudDNSAPI) DescribeDomains(request *alidns.DescribeDomains
 	for _, record := range m.records {
 		domain := alidns.Domain{}
 		domain.DomainName = record.DomainName
+		result.Domain = append(result.Domain, alidns.DomainInDescribeDomains{
+			DomainName: domain.DomainName,
+		})
 	}
 	response = alidns.CreateDescribeDomainsResponse()
 	response.Domains = result
@@ -209,16 +212,16 @@ func (m *MockAlibabaCloudPrivateZoneAPI) DescribeZoneInfo(request *pvtz.Describe
 	response = pvtz.CreateDescribeZoneInfoResponse()
 	response.ZoneId = m.zone.ZoneId
 	response.ZoneName = m.zone.ZoneName
-	response.BindVpcs = pvtz.BindVpcsInDescribeZoneInfo{Vpc: m.zone.Vpcs.Vpc}
+	response.BindVpcs = pvtz.BindVpcsInDescribeZoneInfo{Vpc: make([]pvtz.VpcInDescribeZoneInfo, len(m.zone.Vpcs.Vpc))}
+	for idx, vpc := range m.zone.Vpcs.Vpc {
+		response.BindVpcs.Vpc[idx] = pvtz.VpcInDescribeZoneInfo{VpcName: vpc.VpcName, VpcId: vpc.VpcId, VpcType: vpc.VpcType, RegionName: vpc.RegionName, RegionId: vpc.RegionId}
+	}
 	return response, nil
 }
 
 func newTestAlibabaCloudProvider(private bool) *AlibabaCloudProvider {
 	cfg := alibabaCloudConfig{
-		RegionID:        "cn-beijing",
-		AccessKeyID:     "xxxxxx",
-		AccessKeySecret: "xxxxxx",
-		VPCID:           "vpc-xxxxxx",
+		VPCID: "vpc-xxxxxx",
 	}
 	//
 	//dnsClient, _ := alidns.NewClientWithAccessKey(
@@ -392,44 +395,57 @@ func TestAlibabaCloudProvider_ApplyChanges_PrivateZone(t *testing.T) {
 func TestAlibabaCloudProvider_splitDNSName(t *testing.T) {
 	p := newTestAlibabaCloudProvider(false)
 	endpoint := &endpoint.Endpoint{}
+	hostedZoneDomains := []string{"container-service.top", "example.org"}
+
 	endpoint.DNSName = "www.example.org"
-	rr, domain := p.splitDNSName(endpoint)
+	rr, domain := p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "www" || domain != "example.org" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = ".example.org"
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "@" || domain != "example.org" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = "www"
-	rr, domain = p.splitDNSName(endpoint)
-	if rr != "www" || domain != "" {
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
+	if rr != "@" || domain != "" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = ""
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "@" || domain != "" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = "_30000._tcp.container-service.top"
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "_30000._tcp" || domain != "container-service.top" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = "container-service.top"
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "@" || domain != "container-service.top" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = "a.b.container-service.top"
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "a.b" || domain != "container-service.top" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 	endpoint.DNSName = "a.b.c.container-service.top"
-	rr, domain = p.splitDNSName(endpoint)
+	rr, domain = p.splitDNSName(endpoint.DNSName, hostedZoneDomains)
 	if rr != "a.b.c" || domain != "container-service.top" {
+		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
+	}
+	endpoint.DNSName = "a.b.c.container-service.top"
+	rr, domain = p.splitDNSName(endpoint.DNSName, []string{"c.container-service.top"})
+	if rr != "a.b" || domain != "c.container-service.top" {
+		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
+	}
+
+	endpoint.DNSName = "a.b.c.container-service.top"
+	rr, domain = p.splitDNSName(endpoint.DNSName, []string{"container-service.top", "c.container-service.top"})
+	if rr != "a.b" || domain != "c.container-service.top" {
 		t.Errorf("Failed to splitDNSName for %s: rr=%s, domain=%s", endpoint.DNSName, rr, domain)
 	}
 }

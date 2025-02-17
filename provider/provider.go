@@ -18,6 +18,8 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 
@@ -25,23 +27,40 @@ import (
 	"sigs.k8s.io/external-dns/plan"
 )
 
+// SoftError is an error, that provider will only log as error instead
+// of fatal. It is meant for error propagation from providers to tell
+// that this is a transient error.
+var SoftError error = errors.New("soft error")
+
+// NewSoftErrorf creates a SoftError with formats according to a format specifier and returns the string as a
+func NewSoftErrorf(format string, a ...any) error {
+	return NewSoftError(fmt.Errorf(format, a...))
+}
+
+// NewSoftError creates a SoftError from the given error
+func NewSoftError(err error) error {
+	return errors.Join(SoftError, err)
+}
+
 // Provider defines the interface DNS providers should implement.
 type Provider interface {
 	Records(ctx context.Context) ([]*endpoint.Endpoint, error)
 	ApplyChanges(ctx context.Context, changes *plan.Changes) error
-	PropertyValuesEqual(name string, previous string, current string) bool
-	AdjustEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint
+	// AdjustEndpoints canonicalizes a set of candidate endpoints.
+	// It is called with a set of candidate endpoints obtained from the various sources.
+	// It returns a set modified as required by the provider. The provider is responsible for
+	// adding, removing, and modifying the ProviderSpecific properties to match
+	// the endpoints that the provider returns in `Records` so that the change plan will not have
+	// unnecessary (potentially failing) changes. It may also modify other fields, add, or remove
+	// Endpoints. It is permitted to modify the supplied endpoints.
+	AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error)
 	GetDomainFilter() endpoint.DomainFilterInterface
 }
 
 type BaseProvider struct{}
 
-func (b BaseProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
-	return endpoints
-}
-
-func (b BaseProvider) PropertyValuesEqual(name, previous, current string) bool {
-	return previous == current
+func (b BaseProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
+	return endpoints, nil
 }
 
 func (b BaseProvider) GetDomainFilter() endpoint.DomainFilterInterface {

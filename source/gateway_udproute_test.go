@@ -25,8 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/external-dns/endpoint"
+	v1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/gateway-api/apis/v1alpha2"
-	"sigs.k8s.io/gateway-api/apis/v1beta1"
+	v1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 	gatewayfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
 )
 
@@ -54,9 +55,9 @@ func TestGatewayUDPRouteSourceEndpoints(t *testing.T) {
 			Name:      "internal",
 			Namespace: "default",
 		},
-		Spec: v1beta1.GatewaySpec{
-			Listeners: []v1beta1.Listener{{
-				Protocol: v1beta1.UDPProtocolType,
+		Spec: v1.GatewaySpec{
+			Listeners: []v1.Listener{{
+				Protocol: v1.UDPProtocolType,
 			}},
 		},
 		Status: gatewayStatus(ips...),
@@ -74,7 +75,7 @@ func TestGatewayUDPRouteSourceEndpoints(t *testing.T) {
 		},
 		Spec: v1alpha2.UDPRouteSpec{},
 		Status: v1alpha2.UDPRouteStatus{
-			RouteStatus: v1a2RouteStatus(v1a2ParentRef("default", "internal")),
+			RouteStatus: gwRouteStatus(gwParentRef("default", "internal")),
 		},
 	}
 	_, err = gwClient.GatewayV1alpha2().UDPRoutes(rt.Namespace).Create(ctx, rt, metav1.CreateOptions{})

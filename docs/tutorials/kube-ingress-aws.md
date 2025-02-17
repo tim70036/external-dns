@@ -1,4 +1,4 @@
-# Using ExternalDNS with kube-ingress-aws-controller
+# kube-ingress-aws-controller
 
 This tutorial describes how to use ExternalDNS with the [kube-ingress-aws-controller][1].
 
@@ -17,7 +17,6 @@ create ALBs and NLBs, follow the [Setup Guide][2].
 
 [2]: https://github.com/zalando-incubator/kube-ingress-aws-controller/tree/HEAD/deploy
 
-
 ### Optional RouteGroup
 
 [RouteGroup][3] is a CRD, that enables you to do complex routing with
@@ -25,7 +24,7 @@ create ALBs and NLBs, follow the [Setup Guide][2].
 
 First, you have to apply the RouteGroup CRD to your cluster:
 
-```
+```sh
 kubectl apply -f https://github.com/zalando/skipper/blob/HEAD/dataclients/kubernetes/deploy/apply/routegroups_crd.yaml
 ```
 
@@ -76,13 +75,13 @@ rules:
 ```
 
 See also current RBAC yaml files:
+
 - [kube-ingress-aws-controller](https://github.com/zalando-incubator/kubernetes-on-aws/blob/dev/cluster/manifests/ingress-controller/01-rbac.yaml)
 - [skipper](https://github.com/zalando-incubator/kubernetes-on-aws/blob/dev/cluster/manifests/skipper/rbac.yaml)
 - [external-dns](https://github.com/zalando-incubator/kubernetes-on-aws/blob/dev/cluster/manifests/external-dns/01-rbac.yaml)
 
 [3]: https://opensource.zalando.com/skipper/kubernetes/routegroups/#routegroups
 [4]: https://opensource.zalando.com/skipper
-
 
 ## Deploy an example application
 
@@ -141,8 +140,6 @@ Create the following Ingress to expose the echoserver application to the Interne
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  annotations:
-    kubernetes.io/ingress.class: skipper
   name: echoserver
 spec:
   ingressClassName: skipper
@@ -181,7 +178,6 @@ kind: Ingress
 metadata:
   annotations:
     external-dns.alpha.kubernetes.io/hostname: echoserver.mycluster.example.org, echoserver.example.org
-    kubernetes.io/ingress.class: skipper
   name: echoserver
 spec:
   ingressClassName: skipper
@@ -209,7 +205,6 @@ annotation (which defaults to `ipv4`) to determine this. If this annotation is
 set to `dualstack` then ExternalDNS will create two alias records (one A record
 and one AAAA record) for each hostname associated with the Ingress object.
 
-
 Example:
 
 ```yaml
@@ -218,7 +213,6 @@ kind: Ingress
 metadata:
   annotations:
     alb.ingress.kubernetes.io/ip-address-type: dualstack
-    kubernetes.io/ingress.class: skipper
   name: echoserver
 spec:
   ingressClassName: skipper
@@ -256,7 +250,6 @@ kind: Ingress
 metadata:
   annotations:
     zalando.org/aws-load-balancer-type: nlb
-    kubernetes.io/ingress.class: skipper
   name: echoserver
 spec:
   ingressClassName: skipper

@@ -385,26 +385,20 @@ func (p *IBMCloudProvider) ApplyChanges(ctx context.Context, changes *plan.Chang
 	return p.submitChanges(ctx, ibmcloudChanges)
 }
 
-func (p *IBMCloudProvider) PropertyValuesEqual(name string, previous string, current string) bool {
-	if name == proxyFilter {
-		return plan.CompareBoolean(p.proxiedByDefault, name, previous, current)
-	}
-
-	return p.BaseProvider.PropertyValuesEqual(name, previous, current)
-}
-
 // AdjustEndpoints modifies the endpoints as needed by the specific provider
-func (p *IBMCloudProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+func (p *IBMCloudProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
 	adjustedEndpoints := []*endpoint.Endpoint{}
 	for _, e := range endpoints {
 		log.Debugf("adjusting endpont: %v", *e)
-		if shouldBeProxied(e, p.proxiedByDefault) {
+		proxied := shouldBeProxied(e, p.proxiedByDefault)
+		if proxied {
 			e.RecordTTL = 0
 		}
+		e.SetProviderSpecificProperty(proxyFilter, strconv.FormatBool(proxied))
 
 		adjustedEndpoints = append(adjustedEndpoints, e)
 	}
-	return adjustedEndpoints
+	return adjustedEndpoints, nil
 }
 
 // submitChanges takes a zone and a collection of Changes and sends them as a single transaction.
@@ -757,7 +751,7 @@ func (p *IBMCloudProvider) groupPrivateRecords(records []dnssvcsv1.ResourceRecor
 	for _, records := range groups {
 		targets := make([]string, len(records))
 		for i, record := range records {
-			data := record.Rdata.(map[string]interface{})
+			data := record.Rdata
 			log.Debugf("record data: %v", data)
 			switch *record.Type {
 			case "A":
@@ -820,18 +814,18 @@ func (p *IBMCloudProvider) newIBMCloudChange(action string, endpoint *endpoint.E
 	}
 
 	if p.privateZone {
-		var rData interface{}
+		rData := make(map[string]interface{})
 		switch endpoint.RecordType {
 		case "A":
-			rData = &dnssvcsv1.ResourceRecordInputRdataRdataARecord{
+			rData[dnssvcsv1.CreateResourceRecordOptions_Type_A] = &dnssvcsv1.ResourceRecordInputRdataRdataARecord{
 				Ip: core.StringPtr(target),
 			}
 		case "CNAME":
-			rData = &dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord{
+			rData[dnssvcsv1.CreateResourceRecordOptions_Type_Cname] = &dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord{
 				Cname: core.StringPtr(target),
 			}
 		case "TXT":
-			rData = &dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord{
+			rData[dnssvcsv1.CreateResourceRecordOptions_Type_Txt] = &dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord{
 				Text: core.StringPtr(target),
 			}
 		}
@@ -869,15 +863,15 @@ func (p *IBMCloudProvider) createRecord(ctx context.Context, zoneID string, chan
 		}
 		switch *change.PrivateResourceRecord.Type {
 		case "A":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataARecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_A].(*dnssvcsv1.ResourceRecordInputRdataRdataARecord)
 			aData, _ := p.Client.NewResourceRecordInputRdataRdataARecord(*data.Ip)
 			createResourceRecordOptions.SetRdata(aData)
 		case "CNAME":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_Cname].(*dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord)
 			cnameData, _ := p.Client.NewResourceRecordInputRdataRdataCnameRecord(*data.Cname)
 			createResourceRecordOptions.SetRdata(cnameData)
 		case "TXT":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_Txt].(*dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord)
 			txtData, _ := p.Client.NewResourceRecordInputRdataRdataTxtRecord(*data.Text)
 			createResourceRecordOptions.SetRdata(txtData)
 		}
@@ -910,15 +904,15 @@ func (p *IBMCloudProvider) updateRecord(ctx context.Context, zoneID, recordID st
 		}
 		switch *change.PrivateResourceRecord.Type {
 		case "A":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataARecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_A].(*dnssvcsv1.ResourceRecordInputRdataRdataARecord)
 			aData, _ := p.Client.NewResourceRecordUpdateInputRdataRdataARecord(*data.Ip)
 			updateResourceRecordOptions.SetRdata(aData)
 		case "CNAME":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_Cname].(*dnssvcsv1.ResourceRecordInputRdataRdataCnameRecord)
 			cnameData, _ := p.Client.NewResourceRecordUpdateInputRdataRdataCnameRecord(*data.Cname)
 			updateResourceRecordOptions.SetRdata(cnameData)
 		case "TXT":
-			data, _ := change.PrivateResourceRecord.Rdata.(*dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord)
+			data, _ := change.PrivateResourceRecord.Rdata[dnssvcsv1.CreateResourceRecordOptions_Type_Txt].(*dnssvcsv1.ResourceRecordInputRdataRdataTxtRecord)
 			txtData, _ := p.Client.NewResourceRecordUpdateInputRdataRdataTxtRecord(*data.Text)
 			updateResourceRecordOptions.SetRdata(txtData)
 		}

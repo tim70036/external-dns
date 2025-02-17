@@ -18,6 +18,7 @@ package pihole
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"sigs.k8s.io/external-dns/endpoint"
@@ -26,6 +27,7 @@ import (
 
 type testPiholeClient struct {
 	endpoints []*endpoint.Endpoint
+	requests  *requestTracker
 }
 
 func (t *testPiholeClient) listRecords(ctx context.Context, rtype string) ([]*endpoint.Endpoint, error) {
@@ -40,6 +42,7 @@ func (t *testPiholeClient) listRecords(ctx context.Context, rtype string) ([]*en
 
 func (t *testPiholeClient) createRecord(ctx context.Context, ep *endpoint.Endpoint) error {
 	t.endpoints = append(t.endpoints, ep)
+	t.requests.createRequests = append(t.requests.createRequests, ep)
 	return nil
 }
 
@@ -51,7 +54,18 @@ func (t *testPiholeClient) deleteRecord(ctx context.Context, ep *endpoint.Endpoi
 		}
 	}
 	t.endpoints = newEPs
+	t.requests.deleteRequests = append(t.requests.deleteRequests, ep)
 	return nil
+}
+
+type requestTracker struct {
+	createRequests []*endpoint.Endpoint
+	deleteRequests []*endpoint.Endpoint
+}
+
+func (r *requestTracker) clear() {
+	r.createRequests = nil
+	r.deleteRequests = nil
 }
 
 func TestNewPiholeProvider(t *testing.T) {
@@ -68,8 +82,9 @@ func TestNewPiholeProvider(t *testing.T) {
 }
 
 func TestProvider(t *testing.T) {
+	requests := requestTracker{}
 	p := &PiholeProvider{
-		api: &testPiholeClient{},
+		api: &testPiholeClient{endpoints: make([]*endpoint.Endpoint, 0), requests: &requests},
 	}
 
 	records, err := p.Records(context.Background())
@@ -97,6 +112,21 @@ func TestProvider(t *testing.T) {
 			Targets:    []string{"192.168.1.3"},
 			RecordType: endpoint.RecordTypeA,
 		},
+		{
+			DNSName:    "test1.example.com",
+			Targets:    []string{"fc00::1:192:168:1:1"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
+		{
+			DNSName:    "test2.example.com",
+			Targets:    []string{"fc00::1:192:168:1:2"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
+		{
+			DNSName:    "test3.example.com",
+			Targets:    []string{"fc00::1:192:168:1:3"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
 	}
 	if err := p.ApplyChanges(context.Background(), &plan.Changes{
 		Create: records,
@@ -110,8 +140,14 @@ func TestProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(newRecords) != 3 {
-		t.Fatal("Expected list of 3 records, got:", records)
+	if len(newRecords) != 6 {
+		t.Fatal("Expected list of 6 records, got:", records)
+	}
+	if len(requests.createRequests) != 6 {
+		t.Fatal("Expected 6 create requests, got:", requests.createRequests)
+	}
+	if len(requests.deleteRequests) != 0 {
+		t.Fatal("Expected no delete requests, got:", requests.deleteRequests)
 	}
 
 	for idx, record := range records {
@@ -121,7 +157,13 @@ func TestProvider(t *testing.T) {
 		if newRecords[idx].Targets[0] != record.Targets[0] {
 			t.Error("Targets malformed on retrieval, got:", newRecords[idx].Targets, "expected:", record.Targets)
 		}
+
+		if !reflect.DeepEqual(requests.createRequests[idx], record) {
+			t.Error("Unexpected create request, got:", newRecords[idx].DNSName, "expected:", record.DNSName)
+		}
 	}
+
+	requests.clear()
 
 	// Test delete a record
 
@@ -136,14 +178,37 @@ func TestProvider(t *testing.T) {
 			Targets:    []string{"192.168.1.2"},
 			RecordType: endpoint.RecordTypeA,
 		},
+		{
+			DNSName:    "test1.example.com",
+			Targets:    []string{"fc00::1:192:168:1:1"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
+		{
+			DNSName:    "test2.example.com",
+			Targets:    []string{"fc00::1:192:168:1:2"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
+	}
+	recordToDeleteA := endpoint.Endpoint{
+		DNSName:    "test3.example.com",
+		Targets:    []string{"192.168.1.3"},
+		RecordType: endpoint.RecordTypeA,
 	}
 	if err := p.ApplyChanges(context.Background(), &plan.Changes{
 		Delete: []*endpoint.Endpoint{
-			{
-				DNSName:    "test3.example.com",
-				Targets:    []string{"192.168.1.3"},
-				RecordType: endpoint.RecordTypeA,
-			},
+			&recordToDeleteA,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recordToDeleteAAAA := endpoint.Endpoint{
+		DNSName:    "test3.example.com",
+		Targets:    []string{"fc00::1:192:168:1:3"},
+		RecordType: endpoint.RecordTypeAAAA,
+	}
+	if err := p.ApplyChanges(context.Background(), &plan.Changes{
+		Delete: []*endpoint.Endpoint{
+			&recordToDeleteAAAA,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -154,8 +219,14 @@ func TestProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(newRecords) != 2 {
-		t.Fatal("Expected list of 2 records, got:", records)
+	if len(newRecords) != 4 {
+		t.Fatal("Expected list of 4 records, got:", records)
+	}
+	if len(requests.createRequests) != 0 {
+		t.Fatal("Expected no create requests, got:", requests.createRequests)
+	}
+	if len(requests.deleteRequests) != 2 {
+		t.Fatal("Expected 2 delete request, got:", requests.deleteRequests)
 	}
 
 	for idx, record := range records {
@@ -166,6 +237,15 @@ func TestProvider(t *testing.T) {
 			t.Error("Targets malformed on retrieval, got:", newRecords[idx].Targets, "expected:", record.Targets)
 		}
 	}
+
+	if !reflect.DeepEqual(requests.deleteRequests[0], &recordToDeleteA) {
+		t.Error("Unexpected delete request, got:", requests.deleteRequests[0], "expected:", recordToDeleteA)
+	}
+	if !reflect.DeepEqual(requests.deleteRequests[1], &recordToDeleteAAAA) {
+		t.Error("Unexpected delete request, got:", requests.deleteRequests[1], "expected:", recordToDeleteAAAA)
+	}
+
+	requests.clear()
 
 	// Test update a record
 
@@ -180,20 +260,60 @@ func TestProvider(t *testing.T) {
 			Targets:    []string{"10.0.0.1"},
 			RecordType: endpoint.RecordTypeA,
 		},
+		{
+			DNSName:    "test1.example.com",
+			Targets:    []string{"fc00::1:192:168:1:1"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
+		{
+			DNSName:    "test2.example.com",
+			Targets:    []string{"fc00::1:10:0:0:1"},
+			RecordType: endpoint.RecordTypeAAAA,
+		},
 	}
 	if err := p.ApplyChanges(context.Background(), &plan.Changes{
 		UpdateOld: []*endpoint.Endpoint{
+			{
+				DNSName:    "test1.example.com",
+				Targets:    []string{"192.168.1.1"},
+				RecordType: endpoint.RecordTypeA,
+			},
 			{
 				DNSName:    "test2.example.com",
 				Targets:    []string{"192.168.1.2"},
 				RecordType: endpoint.RecordTypeA,
 			},
+			{
+				DNSName:    "test1.example.com",
+				Targets:    []string{"fc00::1:192:168:1:1"},
+				RecordType: endpoint.RecordTypeAAAA,
+			},
+			{
+				DNSName:    "test2.example.com",
+				Targets:    []string{"fc00::1:192:168:1:2"},
+				RecordType: endpoint.RecordTypeAAAA,
+			},
 		},
 		UpdateNew: []*endpoint.Endpoint{
+			{
+				DNSName:    "test1.example.com",
+				Targets:    []string{"192.168.1.1"},
+				RecordType: endpoint.RecordTypeA,
+			},
 			{
 				DNSName:    "test2.example.com",
 				Targets:    []string{"10.0.0.1"},
 				RecordType: endpoint.RecordTypeA,
+			},
+			{
+				DNSName:    "test1.example.com",
+				Targets:    []string{"fc00::1:192:168:1:1"},
+				RecordType: endpoint.RecordTypeAAAA,
+			},
+			{
+				DNSName:    "test2.example.com",
+				Targets:    []string{"fc00::1:10:0:0:1"},
+				RecordType: endpoint.RecordTypeAAAA,
 			},
 		},
 	}); err != nil {
@@ -205,8 +325,14 @@ func TestProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(newRecords) != 2 {
-		t.Fatal("Expected list of 2 records, got:", records)
+	if len(newRecords) != 4 {
+		t.Fatal("Expected list of 4 records, got:", newRecords)
+	}
+	if len(requests.createRequests) != 2 {
+		t.Fatal("Expected 2 create request, got:", requests.createRequests)
+	}
+	if len(requests.deleteRequests) != 2 {
+		t.Fatal("Expected 2 delete request, got:", requests.deleteRequests)
 	}
 
 	for idx, record := range records {
@@ -217,4 +343,55 @@ func TestProvider(t *testing.T) {
 			t.Error("Targets malformed on retrieval, got:", newRecords[idx].Targets, "expected:", record.Targets)
 		}
 	}
+
+	expectedCreateA := endpoint.Endpoint{
+		DNSName:    "test2.example.com",
+		Targets:    []string{"10.0.0.1"},
+		RecordType: endpoint.RecordTypeA,
+	}
+	expectedDeleteA := endpoint.Endpoint{
+		DNSName:    "test2.example.com",
+		Targets:    []string{"192.168.1.2"},
+		RecordType: endpoint.RecordTypeA,
+	}
+	expectedCreateAAAA := endpoint.Endpoint{
+		DNSName:    "test2.example.com",
+		Targets:    []string{"fc00::1:10:0:0:1"},
+		RecordType: endpoint.RecordTypeAAAA,
+	}
+	expectedDeleteAAAA := endpoint.Endpoint{
+		DNSName:    "test2.example.com",
+		Targets:    []string{"fc00::1:192:168:1:2"},
+		RecordType: endpoint.RecordTypeAAAA,
+	}
+
+	for _, request := range requests.createRequests {
+		switch request.RecordType {
+		case endpoint.RecordTypeA:
+			if !reflect.DeepEqual(request, &expectedCreateA) {
+				t.Error("Unexpected create request, got:", request, "expected:", &expectedCreateA)
+			}
+		case endpoint.RecordTypeAAAA:
+			if !reflect.DeepEqual(request, &expectedCreateAAAA) {
+				t.Error("Unexpected create request, got:", request, "expected:", &expectedCreateAAAA)
+			}
+		default:
+		}
+	}
+
+	for _, request := range requests.deleteRequests {
+		switch request.RecordType {
+		case endpoint.RecordTypeA:
+			if !reflect.DeepEqual(request, &expectedDeleteA) {
+				t.Error("Unexpected delete request, got:", request, "expected:", &expectedDeleteA)
+			}
+		case endpoint.RecordTypeAAAA:
+			if !reflect.DeepEqual(request, &expectedDeleteAAAA) {
+				t.Error("Unexpected delete request, got:", request, "expected:", &expectedDeleteAAAA)
+			}
+		default:
+		}
+	}
+
+	requests.clear()
 }

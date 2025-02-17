@@ -40,14 +40,13 @@ func (im *NoopRegistry) GetDomainFilter() endpoint.DomainFilterInterface {
 	return im.provider.GetDomainFilter()
 }
 
+func (im *NoopRegistry) OwnerID() string {
+	return ""
+}
+
 // Records returns the current records from the dns provider
 func (im *NoopRegistry) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	return im.provider.Records(ctx)
-}
-
-// MissingRecords returns nil because there is no missing records for Noop registry
-func (im *NoopRegistry) MissingRecords() []*endpoint.Endpoint {
-	return nil
 }
 
 // ApplyChanges propagates changes to the dns provider
@@ -55,12 +54,7 @@ func (im *NoopRegistry) ApplyChanges(ctx context.Context, changes *plan.Changes)
 	return im.provider.ApplyChanges(ctx, changes)
 }
 
-// PropertyValuesEqual compares two property values for equality
-func (im *NoopRegistry) PropertyValuesEqual(attribute string, previous string, current string) bool {
-	return im.provider.PropertyValuesEqual(attribute, previous, current)
-}
-
 // AdjustEndpoints modifies the endpoints as needed by the specific provider
-func (im *NoopRegistry) AdjustEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+func (im *NoopRegistry) AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
 	return im.provider.AdjustEndpoints(endpoints)
 }
